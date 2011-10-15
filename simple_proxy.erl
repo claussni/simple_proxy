@@ -1,26 +1,43 @@
 -module(simple_proxy).
 
--export([start/0]).
+-export([start/0, stop/0]).
 
--export([wait_connect/1, handle/1]).
+-export([start/1, wait_connect/1]).
 
 start() ->
-	{ok, ListenSocket} = gen_tcp:listen(1500, [binary, {active, true}]),
+	register(?MODULE, spawn(?MODULE, start, [1500])).
+
+start(Port) ->
+	{ok, ListenSocket} = gen_tcp:listen(Port, [binary, {active, true}]),
 	spawn(?MODULE, wait_connect, [ListenSocket]),
-	ok.
+	io:format("wait for stop signal~n"),
+	receive
+		{stop, From} ->
+			From ! {ok, stopped}
+	end.
+
+stop() ->
+	?MODULE ! {stop, self()},
+	receive
+		{ok, Return} -> Return
+	end.
+	
 
 wait_connect(ListenSocket) ->
-	{ok, AcceptSocket} = gen_tcp:accept(ListenSocket),
-	spawn(?MODULE, wait_connect, [ListenSocket]),
-	handle(AcceptSocket).
-
-handle(Socket) ->
-	receive
-		{tcp, Socket, Data} ->
-			io:format("received:~p~n", [Data]),
-			gen_tcp:send(Socket, <<"HTTP/1.1 501 Not Implemented\r\n">>);
-		{tcp_error, Socket, Reason} ->
-			io:format("error:~p~n", [Reason]);
-		{tcp_closed, Socket} ->
-			io:format("closed:~p~n", [Socket])
+	case gen_tcp:accept(ListenSocket) of
+		{ok, AcceptSocket} ->
+			spawn(?MODULE, wait_connect, [ListenSocket]),
+			receive
+				{tcp, AcceptSocket, Data} ->
+					io:format("received:~p~n", [Data]),
+					gen_tcp:send(AcceptSocket, <<"HTTP/1.1 501 Not Implemented\r\n">>);
+				{tcp_error, AcceptSocket, Reason} ->
+					io:format("error:~p~n", [Reason]);
+				{tcp_closed, AcceptSocket} ->
+					io:format("closed:~p~n", [AcceptSocket]);
+				_ -> ok
+			end;
+		{error, Reason} ->
+			io:format("error:~p~n", [Reason])
 	end.
+
