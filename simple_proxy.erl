@@ -1,32 +1,35 @@
 -module(simple_proxy).
 
--export([start/0, stop/0]).
-
--export([start/1, wait_connect/1]).
+-compile(export_all).
 
 start() ->
-	register(?MODULE, spawn(?MODULE, start, [1500])).
-
-start(Port) ->
-	{ok, ListenSocket} = gen_tcp:listen(Port, [binary, {active, true}]),
-	spawn(?MODULE, wait_connect, [ListenSocket]),
-	io:format("wait for stop signal~n"),
-	receive
-		{stop, From} ->
-			From ! {ok, stopped}
-	end.
+	register(?MODULE, spawn(?MODULE, proxy_start, [1500])),
+	ok.
 
 stop() ->
-	?MODULE ! {stop, self()},
-	receive
-		{ok, Return} -> Return
+	try
+		?MODULE ! {stop, self()},
+		receive
+			{ok, stopped} -> ok;
+			_Other -> {error, unknown_response}
+		end
+	catch
+		error:badarg -> {error, {?MODULE, not_started}}
 	end.
-	
 
-wait_connect(ListenSocket) ->
+proxy_start(Port) ->
+	{ok, ListenSocket} = gen_tcp:listen(Port, [binary, {active, true}]),
+	spawn_link(?MODULE, proxy_await_connect, [ListenSocket]),
+	receive
+		{stop, From} -> From ! {ok, stopped};
+		_Other -> {error, unknown_message}
+	end.
+
+
+proxy_await_connect(ListenSocket) ->
 	case gen_tcp:accept(ListenSocket) of
 		{ok, AcceptSocket} ->
-			spawn(?MODULE, wait_connect, [ListenSocket]),
+			spawn(?MODULE, proxy_await_connect, [ListenSocket]),
 			receive
 				{tcp, AcceptSocket, Data} ->
 					io:format("received:~p~n", [Data]),
@@ -38,6 +41,6 @@ wait_connect(ListenSocket) ->
 				_ -> ok
 			end;
 		{error, Reason} ->
-			io:format("error:~p~n", [Reason])
+			exit(Reason)
 	end.
 
