@@ -19,9 +19,12 @@ stop() ->
 
 proxy_start(Port) ->
 	{ok, ListenSocket} = gen_tcp:listen(Port, [binary, {active, true}]),
+	inets:start(),
 	spawn_link(?MODULE, proxy_await_connect, [ListenSocket]),
 	receive
-		{stop, From} -> From ! {ok, stopped};
+		{stop, From} ->
+			inets:stop(),
+			From ! {ok, stopped};
 		_Other -> {error, unknown_message}
 	end.
 
@@ -32,8 +35,8 @@ proxy_await_connect(ListenSocket) ->
 			spawn(?MODULE, proxy_await_connect, [ListenSocket]),
 			receive
 				{tcp, AcceptSocket, Data} ->
-					io:format("received:~p~n", [Data]),
-					gen_tcp:send(AcceptSocket, <<"HTTP/1.1 501 Not Implemented\r\n">>);
+					Result = proxy_perform_request(Data),
+					gen_tcp:send(AcceptSocket, Result);
 				{tcp_error, AcceptSocket, Reason} ->
 					io:format("error:~p~n", [Reason]);
 				{tcp_closed, AcceptSocket} ->
@@ -43,4 +46,16 @@ proxy_await_connect(ListenSocket) ->
 		{error, Reason} ->
 			exit(Reason)
 	end.
+
+proxy_perform_request(Request) ->
+	Url = extract_target_url(Request),
+	{ok, {{_Version, 200, _ReasonPhrase}, _Headers, Body}} =
+	      httpc:request(Url),
+	Body.
+	
+
+extract_target_url(Request) ->
+	[Req, _] = binary:split(Request, <<"HTTP">>),
+	[_, Url] = binary:split(Req, <<" ">>),
+	binary_to_list(Url).
 
